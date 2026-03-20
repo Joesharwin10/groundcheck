@@ -1,7 +1,6 @@
 import os 
 import json
 import datetime
-import requests
 import streamlit as st
 from groq import Groq
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -25,17 +24,18 @@ def load_chroma_client():
 embedding_model =load_embedding_model()
 chroma_client =load_chroma_client()
 def log_session(username, video_url, question,
-                chunks, tokens, verdict):
+                chunks, tokens, verdict, faithfulness="N/A"):
     entry = {
-        "timestamp": datetime.datetime.now().strftime(
+        "timestamp":   datetime.datetime.now().strftime(
             "%Y-%m-%d %H:%M:%S"
         ),
-        "username":  username,
-        "video_url": video_url,
-        "question":  question,
-        "tokens":    tokens,
-        "chunks":    len(chunks),
-        "verdict":   verdict
+        "username":    username,
+        "video_url":   video_url,
+        "question":    question,
+        "tokens":      tokens,
+        "chunks":      len(chunks),
+        "verdict":     verdict,
+        "faithfulness": faithfulness
     }
 
     if os.path.exists(LOG_FILE):
@@ -58,69 +58,25 @@ def extract_video_id(url):
     else:
         video_id = url.strip()
     return video_id
-@st.cache_data(show_spinner=False)
-@st.cache_data(show_spinner=False)
 def fetch_transcript(video_id):
-
-    import time
-    import re
-    import json
     import requests
-    from xml.etree import ElementTree as ET
-
-    cache_file = f"cache_{video_id}.txt"
-
-    if os.path.exists(cache_file):
-        with open(cache_file, "r", encoding="utf-8") as f:
-            return f.read()
-
-    headers = {"User-Agent": "Mozilla/5.0"}
-
-    # ===== METHOD 1 (HTML SCRAPE) =====
+    ytt_api = YouTubeTranscriptApi()
+    
     try:
-        url = f"https://www.youtube.com/watch?v={video_id}"
-        response = requests.get(url, headers=headers)
-        html = response.text
-
-        match = re.search(r'"captionTracks":(\[.*?\])', html)
-
-        if match:
-            captions = json.loads(match.group(1))
-            subtitle_url = captions[0]['baseUrl']
-
-            subtitle_xml = requests.get(subtitle_url, headers=headers).text
-            root = ET.fromstring(subtitle_xml)
-
-            transcript = " ".join([
-                node.text for node in root.findall('.//text') if node.text
-            ])
-
-            with open(cache_file, "w", encoding="utf-8") as f:
-                f.write(transcript)
-
-            return transcript
-
+        transcript_list = ytt_api.fetch(video_id)
     except Exception:
-        pass
-
-    # ===== METHOD 2 (FALLBACK) =====
-    try:
-        from youtube_transcript_api import YouTubeTranscriptApi
-
-        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-
-        transcript = " ".join([item['text'] for item in transcript_list])
-
-        with open(cache_file, "w", encoding="utf-8") as f:
-            f.write(transcript)
-
-        return transcript
-
-    except Exception:
-        pass
-
-    # ===== FINAL ERROR =====
-    raise Exception("Transcript blocked by YouTube (cloud IP issue). Try another video.")
+        # fallback with different approach
+        from youtube_transcript_api import (
+            YouTubeTranscriptApi as YT
+        )
+        transcript_list = YT().fetch(video_id)
+    
+    full_transcript = " ".join([
+        entry.text.strip()
+        for entry in transcript_list
+    ])
+    return full_transcript
+def chunk_text(text):
     words = text.split()
     chunks = []
     start = 0
@@ -306,7 +262,8 @@ def show_admin_panel():
                         st.warning(f"⚠ {verdict}")
                     else:
                         st.write(verdict)
-
+                    st.markdown("**Faithfulness:**")
+                    st.write(entry.get('faithfulness', 'N/A'))    
                     st.markdown("**Timestamp:**")
                     st.write(entry['timestamp'])
         st.markdown("---")
@@ -527,13 +484,18 @@ with right_col:
                 st.session_state.answer_result = result
                 st.session_state.verdict_value = verdict_value
 
+                faithfulness_score = "N/A"
+                if "FAITHFULNESS" in parsed:
+                    faithfulness_score = parsed["FAITHFULNESS"]["score"]
+
                 log_session(
-                    username  = st.session_state.username,
-                    video_url = st.session_state.current_video_url,
-                    question  = question,
-                    chunks    = result['chunks'],
-                    tokens    = st.session_state.transcript_info['tokens'],
-                    verdict   = verdict_value
+                    username     = st.session_state.username,
+                    video_url    = st.session_state.current_video_url,
+                    question     = question,
+                    chunks       = result['chunks'],
+                    tokens       = st.session_state.transcript_info['tokens'],
+                    verdict      = verdict_value,
+                    faithfulness = faithfulness_score
                 )
 
         if st.session_state.answer_result is not None:
