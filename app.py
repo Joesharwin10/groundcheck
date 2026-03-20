@@ -59,61 +59,68 @@ def extract_video_id(url):
         video_id = url.strip()
     return video_id
 @st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False)
 def fetch_transcript(video_id):
 
     import time
     import re
     import json
+    import requests
     from xml.etree import ElementTree as ET
 
     cache_file = f"cache_{video_id}.txt"
 
-    # ✅ Use cache first
     if os.path.exists(cache_file):
         with open(cache_file, "r", encoding="utf-8") as f:
             return f.read()
 
-    url = f"https://www.youtube.com/watch?v={video_id}"
+    headers = {"User-Agent": "Mozilla/5.0"}
 
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
+    # ===== METHOD 1 (HTML SCRAPE) =====
+    try:
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        response = requests.get(url, headers=headers)
+        html = response.text
 
-    for attempt in range(3):
-        try:
-            response = requests.get(url, headers=headers)
-            html = response.text
+        match = re.search(r'"captionTracks":(\[.*?\])', html)
 
-            # Extract captions JSON
-            match = re.search(r'"captionTracks":(\[.*?\])', html)
-
-            if not match:
-                raise Exception("No captions found")
-
+        if match:
             captions = json.loads(match.group(1))
-
             subtitle_url = captions[0]['baseUrl']
 
-            subtitle_response = requests.get(subtitle_url, headers=headers)
-            subtitle_xml = subtitle_response.text
-
+            subtitle_xml = requests.get(subtitle_url, headers=headers).text
             root = ET.fromstring(subtitle_xml)
 
             transcript = " ".join([
                 node.text for node in root.findall('.//text') if node.text
             ])
-        except Exception:
-            if attempt < 2:
-                time.sleep(2)
-            else:
-                raise Exception("Transcript fetch failed (blocked or no subtitles)")
 
-    # ✅ Save locally
-    with open(cache_file, "w", encoding="utf-8") as f:
-        f.write(full_transcript)
+            with open(cache_file, "w", encoding="utf-8") as f:
+                f.write(transcript)
 
-    return full_transcript
-def chunk_text(text):
+            return transcript
+
+    except Exception:
+        pass
+
+    # ===== METHOD 2 (FALLBACK) =====
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+
+        transcript = " ".join([item['text'] for item in transcript_list])
+
+        with open(cache_file, "w", encoding="utf-8") as f:
+            f.write(transcript)
+
+        return transcript
+
+    except Exception:
+        pass
+
+    # ===== FINAL ERROR =====
+    raise Exception("Transcript blocked by YouTube (cloud IP issue). Try another video.")
     words = text.split()
     chunks = []
     start = 0
