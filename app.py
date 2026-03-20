@@ -1,6 +1,7 @@
 import os 
 import json
 import datetime
+import requests
 import streamlit as st
 from groq import Groq
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -61,30 +62,51 @@ def extract_video_id(url):
 def fetch_transcript(video_id):
 
     import time
+    import re
+    import json
+    from xml.etree import ElementTree as ET
 
-    # ✅ Local cache (prevents repeated YouTube calls)
     cache_file = f"cache_{video_id}.txt"
+
+    # ✅ Use cache first
     if os.path.exists(cache_file):
         with open(cache_file, "r", encoding="utf-8") as f:
             return f.read()
 
-    ytt_api = YouTubeTranscriptApi()
+    url = f"https://www.youtube.com/watch?v={video_id}"
 
-    # ✅ Retry logic (reduces blocking)
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+
     for attempt in range(3):
         try:
-            transcript_list = ytt_api.fetch(video_id)
-            break
-        except Exception as e:
+            response = requests.get(url, headers=headers)
+            html = response.text
+
+            # Extract captions JSON
+            match = re.search(r'"captionTracks":(\[.*?\])', html)
+
+            if not match:
+                raise Exception("No captions found")
+
+            captions = json.loads(match.group(1))
+
+            subtitle_url = captions[0]['baseUrl']
+
+            subtitle_response = requests.get(subtitle_url, headers=headers)
+            subtitle_xml = subtitle_response.text
+
+            root = ET.fromstring(subtitle_xml)
+
+            transcript = " ".join([
+                node.text for node in root.findall('.//text') if node.text
+            ])
+        except Exception:
             if attempt < 2:
                 time.sleep(2)
             else:
-                raise e
-
-    full_transcript = " ".join([
-        entry.text.strip()
-        for entry in transcript_list
-    ])
+                raise Exception("Transcript fetch failed (blocked or no subtitles)")
 
     # ✅ Save locally
     with open(cache_file, "w", encoding="utf-8") as f:
