@@ -57,23 +57,39 @@ def extract_video_id(url):
     else:
         video_id = url.strip()
     return video_id
+@st.cache_data(show_spinner=False)
 def fetch_transcript(video_id):
-    import requests
+
+    import time
+
+    # ✅ Local cache (prevents repeated YouTube calls)
+    cache_file = f"cache_{video_id}.txt"
+    if os.path.exists(cache_file):
+        with open(cache_file, "r", encoding="utf-8") as f:
+            return f.read()
+
     ytt_api = YouTubeTranscriptApi()
-    
-    try:
-        transcript_list = ytt_api.fetch(video_id)
-    except Exception:
-        # fallback with different approach
-        from youtube_transcript_api import (
-            YouTubeTranscriptApi as YT
-        )
-        transcript_list = YT().fetch(video_id)
-    
+
+    # ✅ Retry logic (reduces blocking)
+    for attempt in range(3):
+        try:
+            transcript_list = ytt_api.fetch(video_id)
+            break
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(2)
+            else:
+                raise e
+
     full_transcript = " ".join([
         entry.text.strip()
         for entry in transcript_list
     ])
+
+    # ✅ Save locally
+    with open(cache_file, "w", encoding="utf-8") as f:
+        f.write(full_transcript)
+
     return full_transcript
 def chunk_text(text):
     words = text.split()
